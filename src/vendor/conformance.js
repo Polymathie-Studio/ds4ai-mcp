@@ -97,7 +97,7 @@ function operable(html) {
   const divButtons = (html.match(/<(?:div|span)\b[^>]{0,8000}\bonclick=/gi) || []).length;
   if (divButtons) findings.push(finding('error', 'div-button', `${divButtons} div or span element(s) with onclick; a control should be a <button>, which is focusable and keyboard-operable.`));
 
-  const inputs = tagAttrs(html, 'input').filter((t) => !['hidden', 'submit', 'button', 'image'].includes((t.attrs.type || 'text').toLowerCase()));
+  const inputs = tagAttrs(html, 'input').filter((t) => !['hidden', 'submit', 'button', 'image'].includes((t.attrs.type || 'text').toLowerCase()) && (t.attrs['aria-hidden'] || '').toLowerCase() !== 'true');
   const unlabeled = inputs.filter((t) => !t.attrs['aria-label'] && !t.attrs['aria-labelledby'] && !t.attrs.id);
   if (unlabeled.length) findings.push(finding('warning', 'input-unlabeled', `${unlabeled.length} input(s) with no id, aria-label, or aria-labelledby; likely unlabeled to a screen reader.`));
 
