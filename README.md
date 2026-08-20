@@ -39,4 +39,6 @@ DS4AI, the Design Suite for AI, from Polymathie-Studio, joins PT4AI and PC4AI in
 
 ## License
 
-Apache-2.0. Copyright 2026 Regis Lloyd Chapman. See `LICENSE` and `NOTICE`.
+Apache-2.0 for the server. Copyright 2026 Regis Lloyd Chapman. See `LICENSE` and `NOTICE`.
+
+The bundled resources keep their own licenses, from the [Polymathie-Studio/missing](https://github.com/Polymathie-Studio/missing) repository: `resources/standard.md` (the MISSING standard) is dual-licensed CC-BY-4.0; the manifest and `AGENTS.md` are Apache-2.0. The vendored primitive source under `src/vendor/` is Apache-2.0, from its instrument repository.

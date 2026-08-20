@@ -1,2 +1,6 @@
 DS4AI MCP server
 Copyright 2026 Regis Lloyd Chapman
+
+Bundled resources retain their own licenses (from Polymathie-Studio/missing):
+resources/standard.md is CC-BY-4.0; the manifest and AGENTS.md are Apache-2.0.
+Vendored primitive source under src/vendor/ is Apache-2.0.
