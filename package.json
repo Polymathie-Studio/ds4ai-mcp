@@ -1,0 +1,40 @@
+{
+  "name": "@polymathie/ds4ai",
+  "version": "0.1.0",
+  "description": "DS4AI MCP server: serves the Design Suite for AI as callable tools, audit a surface across the invisible-correctness axes, and generate head metadata, delivery markup, and palettes, plus the family manifest, agent-instruction, and standard as resources.",
+  "keywords": [
+    "mcp",
+    "ds4ai",
+    "design-suite",
+    "accessibility",
+    "seo",
+    "core-web-vitals",
+    "conformance",
+    "polymathie"
+  ],
+  "license": "Apache-2.0",
+  "author": "Regis Lloyd Chapman",
+  "type": "module",
+  "bin": {
+    "ds4ai-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "resources/",
+    "README.md",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  }
+}
