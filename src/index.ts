@@ -21,6 +21,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
+import { safeFetchHtml, UnsafeUrlError } from './safe-fetch.js'
 
 // The bundled primitives (vendored zero-dependency ES modules).
 import { audit as auditSurface } from './vendor/conformance.js'
@@ -71,8 +72,15 @@ server.tool(
   async ({ url, html }) => {
     let markup = html
     if (!markup && url) {
-      const r = await fetch(url, { headers: { 'user-agent': 'ds4ai-mcp/conformance' } })
-      markup = await r.text()
+      // Fetch through the guarded Stage 1 fetcher: scheme allowlist, resolve-then-pin
+      // SSRF guard, redirect re-validation, and size, time, and decompression caps.
+      // The fetched body is inert data for the pure static auditor, never executed.
+      try {
+        markup = await safeFetchHtml(url)
+      } catch (e) {
+        const why = e instanceof UnsafeUrlError ? e.message : (e as Error).message
+        return textOut(`Could not fetch ${url}: ${why}`)
+      }
     }
     if (!markup) return textOut('Provide either a url to fetch or an html string to audit.')
     return out(auditSurface(markup))
