@@ -27,6 +27,7 @@ import { isIP } from 'node:net'
 import { request as httpsRequest, type RequestOptions } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib'
+import { Readable } from 'node:stream'
 
 const MAX_REDIRECTS = 5
 const MAX_BYTES = 5 * 1024 * 1024 // 5 MB of decompressed HTML is ample
@@ -53,7 +54,8 @@ function v4Forbidden(ip: string): boolean {
   if (a === 169 && b === 254) return true // link-local, includes 169.254.169.254 metadata
   if (a === 172 && b >= 16 && b <= 31) return true // private
   if (a === 192 && b === 168) return true // private
-  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64/10
+  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64/10, includes Alibaba metadata 100.100.100.200
+  if (a === 168 && b === 63 && p[2] === 129 && p[3] === 16) return true // Azure WireServer, a public-range metadata host
   if (a >= 224) return true // multicast and reserved
   return false
 }
@@ -107,6 +109,10 @@ function v6Forbidden(ip: string): boolean {
   if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true // fe80::/10 link-local
   if ((b[0] & 0xfe) === 0xfc) return true // fc00::/7 unique-local
   if (b[0] === 0xff) return true // multicast
+  // Transition mechanisms that tunnel or embed an IPv4 address: decode and judge it.
+  if (b[0] === 0x20 && b[1] === 0x02) return v4Forbidden([b[2], b[3], b[4], b[5]].join('.')) // 6to4 2002::/16
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) return v4Forbidden([b[12], b[13], b[14], b[15]].join('.')) // NAT64 64:ff9b::/96
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return true // Teredo 2001:0000::/32, obfuscated embedding: refuse outright
   return false
 }
 
@@ -155,40 +161,67 @@ async function step(state: FetchState): Promise<string> {
       Host: url.host, // the real host for virtual hosting
       'user-agent': UA,
       accept: 'text/html,application/xhtml+xml',
-      'accept-encoding': 'gzip, deflate, br',
+      // Ask for no compression, so the wire size equals the body size and the size
+      // cap fully bounds memory. A non-compliant server that compresses anyway is
+      // still handled and guarded below; this just removes the bomb surface by default.
+      'accept-encoding': 'identity',
     },
     timeout: remaining,
   }
 
   const result = await new Promise<{ redirectTo?: URL; body?: string }>((resolve, reject) => {
+    // A hard deadline destroys the request after the remaining budget no matter what,
+    // so a slow-drip body that keeps resetting the socket idle timeout still cannot
+    // hold the connection past the total time budget. The settle guard makes ok and
+    // fail idempotent and clears the deadline once the request is done.
+    let settled = false
+    let deadline: NodeJS.Timeout | undefined
+    const ok = (v: { redirectTo?: URL; body?: string }) => { if (settled) return; settled = true; clearTimeout(deadline); resolve(v) }
+    const fail = (e: unknown) => { if (settled) return; settled = true; clearTimeout(deadline); reject(e) }
     const req = requestFn(opts, (r) => {
       const status = r.statusCode ?? 0
       if (status >= 300 && status < 400 && r.headers.location) {
         r.resume() // drain
         let next: URL
-        try { next = new URL(r.headers.location, url) } catch { return reject(new UnsafeUrlError('bad redirect location')) }
-        return resolve({ redirectTo: next })
+        try { next = new URL(r.headers.location, url) } catch { return fail(new UnsafeUrlError('bad redirect location')) }
+        return ok({ redirectTo: next })
       }
-      if (status < 200 || status >= 300) { r.resume(); return reject(new UnsafeUrlError(`upstream status ${status}`)) }
+      if (status < 200 || status >= 300) { r.resume(); return fail(new UnsafeUrlError(`upstream status ${status}`)) }
 
-      const enc = String(r.headers['content-encoding'] || '').toLowerCase()
-      let stream: NodeJS.ReadableStream = r
-      if (enc === 'gzip') stream = r.pipe(createGunzip())
-      else if (enc === 'deflate') stream = r.pipe(createInflate())
-      else if (enc === 'br') stream = r.pipe(createBrotliDecompress())
+      const enc = String(r.headers['content-encoding'] || '').trim().toLowerCase()
+      // Refuse layered encodings (gzip, gzip): a nested-bomb vector.
+      if (enc.includes(',')) { r.resume(); return fail(new UnsafeUrlError('layered content-encoding refused')) }
+      // maxOutputLength bounds a single output chunk (it is per-chunk on a stream, not
+      // a total), so the real defense against a decompression bomb is the streaming
+      // tally below, which destroys the decoder once the cumulative output exceeds the
+      // cap. This is the belt to that suspenders.
+      const zopts = { maxOutputLength: MAX_BYTES }
+      let stream: Readable = r
+      if (enc === 'gzip') stream = r.pipe(createGunzip(zopts))
+      else if (enc === 'deflate') stream = r.pipe(createInflate(zopts))
+      else if (enc === 'br') stream = r.pipe(createBrotliDecompress(zopts))
+      else if (enc && enc !== 'identity') { r.resume(); return fail(new UnsafeUrlError(`unsupported content-encoding: ${enc}`)) }
 
+      // When decompressing, also cap the raw compressed bytes read off the wire, so a
+      // body that stays under the decompressed cap cannot still be arbitrarily large
+      // compressed. destroy the decoder as well as the request so it stops expanding.
+      if (stream !== r) {
+        let raw = 0
+        r.on('data', (c: Buffer) => { raw += c.length; if (raw > MAX_BYTES) { req.destroy(); stream.destroy(); fail(new UnsafeUrlError('compressed body exceeds size cap')) } })
+      }
       const chunks: Buffer[] = []
       let total = 0
       stream.on('data', (c: Buffer) => {
         total += c.length
-        if (total > MAX_BYTES) { req.destroy(); reject(new UnsafeUrlError('response exceeds size cap')); return }
+        if (total > MAX_BYTES) { req.destroy(); stream.destroy(); return fail(new UnsafeUrlError('response exceeds size cap')) }
         chunks.push(c)
       })
-      stream.on('end', () => resolve({ body: Buffer.concat(chunks).toString('utf8') }))
-      stream.on('error', (e) => reject(e))
+      stream.on('end', () => ok({ body: Buffer.concat(chunks).toString('utf8') }))
+      stream.on('error', (e) => fail(e))
     })
+    deadline = setTimeout(() => req.destroy(new UnsafeUrlError('time budget exceeded')), remaining)
     req.on('timeout', () => req.destroy(new UnsafeUrlError('request timed out')))
-    req.on('error', reject)
+    req.on('error', fail)
     req.end()
   })
 

@@ -14,21 +14,54 @@
  * License: Apache-2.0.
  */
 
+// The attribute span is bounded ({0,8000}), and the inner scan is single-pass with
+// no backtracking (a name, then an optional value), so a hostile tag like
+// <meta aaaa...> cannot drive the quadratic backtracking a greedy name-then-required-=
+// pattern would. It also reads unquoted values, not only quoted ones.
 function tagAttrs(html, tag) {
   const out = [];
-  const re = new RegExp('<' + tag + '\\b([^>]*)>', 'gi');
+  const re = new RegExp('<' + tag + '\\b([^>]{0,8000})>', 'gi');
   let m;
   while ((m = re.exec(html))) {
     const attrs = {};
-    const ar = /([\w:-]+)\s*=\s*"([^"]*)"|([\w:-]+)\s*=\s*'([^']*)'/g;
+    const ar = /([\w:-]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]*))?/g;
     let a;
     while ((a = ar.exec(m[1]))) {
-      if (a[1] != null) attrs[a[1].toLowerCase()] = a[2];
-      else attrs[a[3].toLowerCase()] = a[4];
+      if (a[0] === '') { ar.lastIndex++; continue; }
+      let v = a[2] || '';
+      if (v && (v[0] === '"' || v[0] === "'")) v = v.slice(1, -1);
+      attrs[a[1].toLowerCase()] = v;
     }
     out.push({ attrs, raw: m[1] });
   }
   return out;
+}
+
+// Linear helpers that replace the greedy lazy-scan matchAll patterns, which went
+// quadratic on many unclosed <title>/<button> tags. Each opening tag is found once
+// and its close is looked for in a bounded window, so there is no per-start re-scan.
+function firstTitleText(html) {
+  const m = /<title\b[^>]{0,2000}>/i.exec(html);
+  if (!m) return '';
+  const start = m.index + m[0].length;
+  const end = html.indexOf('</title>', start);
+  return (end >= 0 ? html.slice(start, end) : html.slice(start, start + 5000)).trim();
+}
+
+function namelessButtonCount(html) {
+  let count = 0, seen = 0;
+  const openRe = /<button\b([^>]{0,4000})>/gi;
+  let m;
+  while ((m = openRe.exec(html)) && seen < 2000) {
+    seen++;
+    if (/aria-label\s*=/i.test(m[1])) continue;
+    const start = m.index + m[0].length;
+    const win = html.slice(start, start + 2000);
+    const rel = win.indexOf('</button>');
+    const inner = rel >= 0 ? win.slice(0, rel) : win;
+    if (!inner.replace(/<[^>]{0,2000}>/g, '').trim()) count++;
+  }
+  return count;
 }
 
 const finding = (level, code, message) => ({ level, code, message });
@@ -61,16 +94,15 @@ function perceivable(html) {
 // --- Operable (GRASP): static accessibility checks. ---
 function operable(html) {
   const findings = [];
-  const divButtons = (html.match(/<(?:div|span)\b[^>]*\bonclick=/gi) || []).length;
+  const divButtons = (html.match(/<(?:div|span)\b[^>]{0,8000}\bonclick=/gi) || []).length;
   if (divButtons) findings.push(finding('error', 'div-button', `${divButtons} div or span element(s) with onclick; a control should be a <button>, which is focusable and keyboard-operable.`));
 
   const inputs = tagAttrs(html, 'input').filter((t) => !['hidden', 'submit', 'button', 'image'].includes((t.attrs.type || 'text').toLowerCase()));
   const unlabeled = inputs.filter((t) => !t.attrs['aria-label'] && !t.attrs['aria-labelledby'] && !t.attrs.id);
   if (unlabeled.length) findings.push(finding('warning', 'input-unlabeled', `${unlabeled.length} input(s) with no id, aria-label, or aria-labelledby; likely unlabeled to a screen reader.`));
 
-  const buttons = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)];
-  const namelessButtons = buttons.filter((b) => !/aria-label\s*=/i.test(b[1]) && !b[2].replace(/<[^>]*>/g, '').trim());
-  if (namelessButtons.length) findings.push(finding('warning', 'button-no-name', `${namelessButtons.length} button(s) with no text and no aria-label; they have no accessible name.`));
+  const nameless = namelessButtonCount(html);
+  if (nameless) findings.push(finding('warning', 'button-no-name', `${nameless} button(s) with no text and no aria-label; they have no accessible name.`));
 
   if (findings.length === 0) findings.push(finding('pass', 'operable', 'No div-button, unlabeled-input, or nameless-button issues found in the served markup.'));
   return { checked: true, findings };
@@ -104,8 +136,8 @@ function findability(html, opts = {}) {
   const metas = tagAttrs(html, 'meta');
   const byName = (n) => metas.find((t) => t.attrs.name === n);
   const byProp = (p) => metas.find((t) => t.attrs.property === p);
-  const title = [...html.matchAll(/<title[^>]*>([\s\S]*?)<\/title>/gi)].map((m) => m[1].trim());
-  if (!title.length || !title[0]) findings.push(finding('error', 'title', 'No non-empty <title>.'));
+  const title = firstTitleText(html);
+  if (!title) findings.push(finding('error', 'title', 'No non-empty <title>.'));
   if (!byName('description')) findings.push(finding('warning', 'description', 'No meta description.'));
 
   const htmlTag = tagAttrs(html, 'html')[0];
@@ -151,6 +183,10 @@ function delivery(html) {
 // are declared, not counted as clean. opts.url, the URL the HTML was served from,
 // enables the identity round-trip (canonical versus the served URL).
 export function audit(html = '', opts = {}) {
+  // Defense in depth against a pathological page: bound the input the regex passes
+  // process, so no scan runs unbounded even if a future pattern is not fully linear.
+  const MAX_AUDIT_LENGTH = 2 * 1024 * 1024;
+  if (html.length > MAX_AUDIT_LENGTH) html = html.slice(0, MAX_AUDIT_LENGTH);
   const axes = {
     perceivable: perceivable(html),
     operable: operable(html),
