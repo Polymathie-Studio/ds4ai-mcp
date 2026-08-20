@@ -33,6 +33,10 @@ Every result carries a provenance stamp declaring the server and bundled primiti
 
 TypeScript on the MCP SDK with zod schemas, provenance-stamped, following the `@proof-of-coord` pattern. The zero-dependency primitives (TEMPER, BEACON, FLEET, and the MISSING conformance auditor) are bundled in, so the server is self-contained, and each tool stamps the primitive version it bundled. Published to JSR under `@polymathie`, with an npm `bin` alongside.
 
+## Security
+
+The URL-auditing path (`audit_surface` fetching a live URL) is built to a defensive threat model and is adversarially tested and hardened before release against server-side request forgery, denial-of-service, and resource-exhaustion attacks. Fetched content is treated as untrusted input: it is parsed, never executed, and the fetcher connects only to validated public addresses. The implementation is open for review under Apache-2.0.
+
 ## Part of DS4AI
 
 DS4AI, the Design Suite for AI, from Polymathie-Studio, joins PT4AI and PC4AI in the family of corpora served to an AI. The instruments and the MISSING standard live at [Polymathie-Studio](https://github.com/Polymathie-Studio).
