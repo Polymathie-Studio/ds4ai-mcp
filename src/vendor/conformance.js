@@ -181,12 +181,16 @@ function delivery(html) {
 // { ok, axes: { <axis>: { checked, notChecked?, deeper?, findings } } }.
 // ok is true when no finding is an error; axes marked checked:false or 'partial'
 // are declared, not counted as clean. opts.url, the URL the HTML was served from,
-// enables the identity round-trip (canonical versus the served URL).
+// enables the identity round-trip (canonical versus the served URL). A `truncated`
+// note is added when the input exceeded the audit bound and the report is partial.
 export function audit(html = '', opts = {}) {
   // Defense in depth against a pathological page: bound the input the regex passes
   // process, so no scan runs unbounded even if a future pattern is not fully linear.
+  // Declare the truncation rather than silently returning a partial report as clean,
+  // which is the overclaiming this standard exists to prevent.
   const MAX_AUDIT_LENGTH = 2 * 1024 * 1024;
-  if (html.length > MAX_AUDIT_LENGTH) html = html.slice(0, MAX_AUDIT_LENGTH);
+  const truncated = html.length > MAX_AUDIT_LENGTH;
+  if (truncated) html = html.slice(0, MAX_AUDIT_LENGTH);
   const axes = {
     perceivable: perceivable(html),
     operable: operable(html),
@@ -196,5 +200,7 @@ export function audit(html = '', opts = {}) {
     delivery: delivery(html),
   };
   const hasError = Object.values(axes).some((a) => a.findings.some((f) => f.level === 'error'));
-  return { ok: !hasError, axes };
+  const result = { ok: !hasError, axes };
+  if (truncated) result.truncated = `The input exceeded ${MAX_AUDIT_LENGTH} bytes and was truncated for the audit; anything past that point was not seen, so this report is partial. Audit a smaller surface or split the page.`;
+  return result;
 }
