@@ -215,19 +215,41 @@ export function manifest(d = {}) {
 // Parse the attributes of every <meta> or <link> tag in an HTML string, so a
 // check can look a tag up by attribute in any order. A lightweight scan, not a
 // full HTML parser; it reads the served markup, which is the point.
+// The attribute span is bounded and the inner scan is single-pass with no
+// backtracking (a name, then an optional value), so a hostile <meta aaaa...> cannot
+// drive the quadratic backtracking the old greedy-name-then-required-= pattern would.
+// It also reads unquoted values, not only quoted ones.
 function tagAttrs(html, tag) {
   const out = [];
-  const re = new RegExp('<' + tag + '\\b([^>]*)>', 'gi');
+  const re = new RegExp('<' + tag + '\\b([^>]{0,8000})>', 'gi');
   let m;
   while ((m = re.exec(html))) {
     const attrs = {};
-    const ar = /([\w:-]+)\s*=\s*"([^"]*)"|([\w:-]+)\s*=\s*'([^']*)'/g;
+    const ar = /([\w:-]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]*))?/g;
     let a;
     while ((a = ar.exec(m[1]))) {
-      if (a[1] != null) attrs[a[1].toLowerCase()] = a[2];
-      else attrs[a[3].toLowerCase()] = a[4];
+      if (a[0] === '') { ar.lastIndex++; continue; }
+      let v = a[2] || '';
+      if (v && (v[0] === '"' || v[0] === "'")) v = v.slice(1, -1);
+      attrs[a[1].toLowerCase()] = v;
     }
     out.push(attrs);
+  }
+  return out;
+}
+
+// Collect the inner text of each <tag ...>...</close> in a bounded window, finding
+// each opener once with a bounded span, so unclosed-tag spam cannot drive the
+// quadratic re-scan the greedy lazy matchAll did. Iteration-capped.
+function collectBlocks(html, openRe, closeStr, max = 50) {
+  const out = [];
+  let m, seen = 0;
+  while ((m = openRe.exec(html)) && seen < max) {
+    seen++;
+    const start = m.index + m[0].length;
+    const win = html.slice(start, start + 200000);
+    const rel = win.indexOf(closeStr);
+    out.push(rel >= 0 ? win.slice(0, rel) : win);
   }
   return out;
 }
@@ -238,6 +260,8 @@ function tagAttrs(html, tag) {
 // response (no JavaScript) and audit that, since the tags must be there for the
 // non-JS social and AI scrapers. BEACON does not fetch; keeping it pure.
 export function audit(html = '') {
+  // Defense in depth: bound the input the regex passes process.
+  if (html.length > 2 * 1024 * 1024) html = html.slice(0, 2 * 1024 * 1024);
   const errors = [], warnings = [], passed = [];
   const err = (code, message) => errors.push({ level: 'error', code, message });
   const warn = (code, message) => warnings.push({ level: 'warning', code, message });
@@ -254,7 +278,7 @@ export function audit(html = '') {
   if (metaByName('viewport')) pass('viewport', 'Viewport is set.');
   else warn('viewport', 'No viewport meta; mobile rendering, which is what Google indexes, degrades.');
 
-  const titles = [...html.matchAll(/<title[^>]*>([\s\S]*?)<\/title>/gi)].map((m) => m[1].trim());
+  const titles = collectBlocks(html, /<title\b[^>]{0,2000}>/gi, '</title>').map((s) => s.trim());
   if (!titles.length || !titles[0]) err('title', 'No non-empty <title>; it is the primary search result text.');
   else {
     if (titles.length > 1) warn('title-duplicate', `${titles.length} <title> tags found; there should be one.`);
@@ -281,7 +305,7 @@ export function audit(html = '') {
 
   if (canonical && ogUrl && canonical !== ogUrl) warn('agreement', `Canonical (${canonical}) and og:url (${ogUrl}) differ; they should name the same URL.`);
 
-  const ld = [...html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]);
+  const ld = collectBlocks(html, /<script\b[^>]{0,4000}application\/ld\+json[^>]{0,2000}>/gi, '</script>');
   if (!ld.length) warn('structured-data', 'No JSON-LD structured data; rich results are unavailable.');
   ld.forEach((block, i) => {
     try { JSON.parse(block); pass('structured-data', `JSON-LD block ${i + 1} parses.`); }

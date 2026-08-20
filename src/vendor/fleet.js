@@ -150,19 +150,40 @@ const scriptJson = (obj) => JSON.stringify(obj).replace(/</g, '\\u003c').replace
 
 // Parse the attributes of every tag of one kind in an HTML string. A lightweight
 // scan, not a full parser; it reads the served markup, which is the point.
+// The attribute span is bounded and the inner scan is single-pass with no
+// backtracking (a name, then an optional value), so a hostile <img aaaa...> cannot
+// drive the quadratic backtracking the old greedy-name-then-required-= pattern would.
+// It also reads unquoted values, not only quoted ones.
 function tagAttrs(html, tag) {
   const out = [];
-  const re = new RegExp('<' + tag + '\\b([^>]*)>', 'gi');
+  const re = new RegExp('<' + tag + '\\b([^>]{0,8000})>', 'gi');
   let m;
   while ((m = re.exec(html))) {
     const attrs = {};
-    const ar = /([\w:-]+)\s*=\s*"([^"]*)"|([\w:-]+)\s*=\s*'([^']*)'/g;
+    const ar = /([\w:-]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]*))?/g;
     let a;
     while ((a = ar.exec(m[1]))) {
-      if (a[1] != null) attrs[a[1].toLowerCase()] = a[2];
-      else attrs[a[3].toLowerCase()] = a[4];
+      if (a[0] === '') { ar.lastIndex++; continue; }
+      let v = a[2] || '';
+      if (v && (v[0] === '"' || v[0] === "'")) v = v.slice(1, -1);
+      attrs[a[1].toLowerCase()] = v;
     }
     out.push(attrs);
+  }
+  return out;
+}
+
+// Collect the inner text of each <tag ...>...</close> in a bounded window, finding
+// each opener once, so unclosed-tag spam cannot drive a quadratic re-scan.
+function collectBlocks(html, openRe, closeStr, max = 50) {
+  const out = [];
+  let m, seen = 0;
+  while ((m = openRe.exec(html)) && seen < max) {
+    seen++;
+    const start = m.index + m[0].length;
+    const win = html.slice(start, start + 200000);
+    const rel = win.indexOf(closeStr);
+    out.push(rel >= 0 ? win.slice(0, rel) : win);
   }
   return out;
 }
@@ -172,6 +193,8 @@ function tagAttrs(html, tag) {
 // as warnings. Audit the served markup: to judge the LCP image, this reads
 // source order, since a static scan cannot measure the real LCP element.
 export function audit(html = '') {
+  // Defense in depth: bound the input the regex passes process.
+  if (html.length > 2 * 1024 * 1024) html = html.slice(0, 2 * 1024 * 1024);
   const errors = [], warnings = [], passed = [];
   const warn = (code, message) => warnings.push({ level: 'warning', code, message });
   const pass = (code, message) => passed.push({ level: 'pass', code, message });
@@ -183,14 +206,14 @@ export function audit(html = '') {
 
   if (imgs.length && imgs[0].loading === 'lazy') warn('lcp-lazy', 'The first image is loading="lazy"; if it is the LCP image this delays it. Mark the LCP image priority (eager, high fetchpriority).');
 
-  const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+  const headMatch = html.match(/<head[^>]{0,2000}>([\s\S]*?)<\/head>/i);
   const headHtml = headMatch ? headMatch[1] : html;
-  const headScripts = [...headHtml.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]);
+  const headScripts = [...headHtml.matchAll(/<script\b([^>]{0,8000})>/gi)].map((m) => m[1]);
   const blocking = headScripts.filter((a) => /\bsrc=/.test(a) && !/\bdefer\b/.test(a) && !/\basync\b/.test(a) && !/type=["']module["']/.test(a));
   if (blocking.length) warn('render-blocking', `${blocking.length} script(s) in <head> with a src and neither defer nor async block rendering.`);
   else pass('render-blocking', 'No render-blocking scripts in <head>.');
 
-  const styles = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+  const styles = collectBlocks(html, /<style\b[^>]{0,2000}>/gi, '</style>').join('\n');
   const faces = styles.split('@font-face').slice(1);
   const noDisplay = faces.filter((f) => !/font-display/i.test(f.split('}')[0]));
   if (noDisplay.length) warn('font-display', `${noDisplay.length} inline @font-face without font-display; text may hide or shift on load.`);
