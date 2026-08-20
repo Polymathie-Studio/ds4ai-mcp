@@ -33,6 +33,21 @@ function tagAttrs(html, tag) {
 
 const finding = (level, code, message) => ({ level, code, message });
 
+// Normalize a URL for identity comparison: drop the hash, lowercase the host, and
+// treat a bare origin and its trailing slash as the same. Returns the input on parse
+// failure so a comparison degrades to a literal one rather than throwing.
+function normalizeUrl(u, base) {
+  try {
+    const url = new URL(u, base);
+    url.hash = '';
+    let s = url.origin.toLowerCase() + url.pathname + url.search;
+    if (s.endsWith('/')) s = s.slice(0, -1);
+    return s;
+  } catch {
+    return u;
+  }
+}
+
 // --- Perceivable (TEMPER): partial. Contrast needs rendered colors. ---
 function perceivable(html) {
   const findings = [];
@@ -40,7 +55,7 @@ function perceivable(html) {
   if (viewport && /user-scalable\s*=\s*no|maximum-scale\s*=\s*1(\D|$)/i.test(viewport.attrs.content || '')) {
     findings.push(finding('warning', 'zoom-disabled', 'The viewport disables zoom (user-scalable=no or maximum-scale=1); this fails perceivability for low-vision readers.'));
   }
-  return { checked: 'partial', notChecked: 'Color contrast needs rendered colors; run TEMPER contrast() against your palette.', findings };
+  return { checked: 'partial', notChecked: 'Two perceivable checks need more than a static snapshot. Color contrast needs the rendered colors: run TEMPER contrast() against your palette. No-meaning-by-color-alone needs the palette or the rendered page: check that meaning-bearing colors such as the statuses stay separable by luminance (TEMPER simulatedContrast in mono), and that any color-coded meaning also carries a label or an icon.', findings };
 }
 
 // --- Operable (GRASP): static accessibility checks. ---
@@ -84,7 +99,7 @@ function keyPrivacy(html) {
 }
 
 // --- Findability (BEACON): headline checks; run beacon-ui audit for depth. ---
-function findability(html) {
+function findability(html, opts = {}) {
   const findings = [];
   const metas = tagAttrs(html, 'meta');
   const byName = (n) => metas.find((t) => t.attrs.name === n);
@@ -92,10 +107,26 @@ function findability(html) {
   const title = [...html.matchAll(/<title[^>]*>([\s\S]*?)<\/title>/gi)].map((m) => m[1].trim());
   if (!title.length || !title[0]) findings.push(finding('error', 'title', 'No non-empty <title>.'));
   if (!byName('description')) findings.push(finding('warning', 'description', 'No meta description.'));
+
+  const htmlTag = tagAttrs(html, 'html')[0];
+  if (!htmlTag || !(htmlTag.attrs.lang || '').trim()) findings.push(finding('warning', 'html-lang', 'No lang on <html>; set a valid BCP 47 language so assistive tech can pronounce the page and machines can detect its language.'));
+
   const canonical = tagAttrs(html, 'link').find((t) => (t.attrs.rel || '').split(/\s+/).includes('canonical'));
   if (!canonical) findings.push(finding('warning', 'canonical', 'No rel=canonical.'));
   if (!byProp('og:image')) findings.push(finding('warning', 'open-graph', 'No og:image; social and AI previews degrade.'));
-  if (findings.length === 0) findings.push(finding('pass', 'findability', 'Title, description, canonical, and og:image present.'));
+
+  // Identity round-trip: the canonical URL, og:url, and the served URL are one claim,
+  // and drift between them sends a consumer contradictory identity.
+  const canonHref = canonical && canonical.attrs.href;
+  const ogUrl = byProp('og:url');
+  if (canonHref && ogUrl && ogUrl.attrs.content && normalizeUrl(canonHref, opts.url) !== normalizeUrl(ogUrl.attrs.content, opts.url)) {
+    findings.push(finding('warning', 'identity-og-canonical', 'The canonical URL and og:url name different URLs; they must agree, or a consumer gets contradictory identity.'));
+  }
+  if (canonHref && opts.url && normalizeUrl(canonHref, opts.url) !== normalizeUrl(opts.url)) {
+    findings.push(finding('info', 'identity-canonical-elsewhere', 'The page names a canonical URL different from the one served; confirm this cross-URL canonicalization is intended.'));
+  }
+
+  if (findings.length === 0) findings.push(finding('pass', 'findability', 'Title, description, lang, canonical, and og:image present and self-consistent.'));
   return { checked: true, deeper: 'beacon-ui audit(html)', findings };
 }
 
@@ -117,14 +148,15 @@ function delivery(html) {
 // Audit a shipped surface's HTML across all six axes. Returns
 // { ok, axes: { <axis>: { checked, notChecked?, deeper?, findings } } }.
 // ok is true when no finding is an error; axes marked checked:false or 'partial'
-// are declared, not counted as clean.
-export function audit(html = '') {
+// are declared, not counted as clean. opts.url, the URL the HTML was served from,
+// enables the identity round-trip (canonical versus the served URL).
+export function audit(html = '', opts = {}) {
   const axes = {
     perceivable: perceivable(html),
     operable: operable(html),
     offHappyPath: offHappyPath(),
     keyPrivacy: keyPrivacy(html),
-    findability: findability(html),
+    findability: findability(html, opts),
     delivery: delivery(html),
   };
   const hasError = Object.values(axes).some((a) => a.findings.some((f) => f.level === 'error'));

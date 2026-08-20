@@ -83,7 +83,9 @@ server.tool(
       }
     }
     if (!markup) return textOut('Provide either a url to fetch or an html string to audit.')
-    return out(auditSurface(markup))
+    // Pass the fetched URL through so the auditor can run the identity round-trip
+    // (canonical versus the served URL).
+    return out(auditSurface(markup, url ? { url } : undefined))
   },
 )
 
