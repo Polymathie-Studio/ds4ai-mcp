@@ -209,7 +209,7 @@ export function audit(html = '') {
   const headMatch = html.match(/<head[^>]{0,2000}>([\s\S]*?)<\/head>/i);
   const headHtml = headMatch ? headMatch[1] : html;
   const headScripts = [...headHtml.matchAll(/<script\b([^>]{0,8000})>/gi)].map((m) => m[1]);
-  const blocking = headScripts.filter((a) => /\bsrc=/.test(a) && !/\bdefer\b/.test(a) && !/\basync\b/.test(a) && !/type=["']module["']/.test(a));
+  const blocking = headScripts.filter((a) => /\bsrc=/.test(a) && !/\bdefer\b/.test(a) && !/\basync\b/.test(a) && !/type=["']module["']/.test(a) && !/\bnomodule\b/.test(a));
   if (blocking.length) warn('render-blocking', `${blocking.length} script(s) in <head> with a src and neither defer nor async block rendering.`);
   else pass('render-blocking', 'No render-blocking scripts in <head>.');
 
