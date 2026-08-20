@@ -171,7 +171,7 @@ function delivery(html) {
   if (imgs.length && imgs[0].attrs.loading === 'lazy') findings.push(finding('warning', 'lcp-lazy', 'The first image is loading="lazy"; if it is the LCP image this delays it.'));
   const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
   const headHtml = headMatch ? headMatch[1] : html;
-  const blocking = [...headHtml.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]).filter((a) => /\bsrc=/.test(a) && !/\bdefer\b/.test(a) && !/\basync\b/.test(a) && !/type=["']module["']/.test(a));
+  const blocking = [...headHtml.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]).filter((a) => /\bsrc=/.test(a) && !/\bdefer\b/.test(a) && !/\basync\b/.test(a) && !/type=["']module["']/.test(a) && !/\bnomodule\b/i.test(a));
   if (blocking.length) findings.push(finding('warning', 'render-blocking', `${blocking.length} render-blocking script(s) in <head>.`));
   if (findings.length === 0) findings.push(finding('pass', 'delivery', 'Images sized, no lazy first image, no render-blocking head scripts.'));
   return { checked: true, deeper: 'fleet-ui audit(html)', findings };
