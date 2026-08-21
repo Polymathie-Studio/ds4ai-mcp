@@ -138,7 +138,9 @@ async function resolvePinned(hostname: string): Promise<string> {
 
 type FetchState = { url: URL; redirects: number; started: number }
 
-async function step(state: FetchState): Promise<string> {
+type Surface = { html: string; headers: Record<string, string | string[] | undefined>; url: string }
+
+async function step(state: FetchState): Promise<Surface> {
   const { url } = state
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new UnsafeUrlError(`refused scheme: ${url.protocol}`)
   if (Date.now() - state.started > TIME_BUDGET_MS) throw new UnsafeUrlError('time budget exceeded')
@@ -169,14 +171,14 @@ async function step(state: FetchState): Promise<string> {
     timeout: remaining,
   }
 
-  const result = await new Promise<{ redirectTo?: URL; body?: string }>((resolve, reject) => {
+  const result = await new Promise<{ redirectTo?: URL; body?: string; headers?: Record<string, string | string[] | undefined> }>((resolve, reject) => {
     // A hard deadline destroys the request after the remaining budget no matter what,
     // so a slow-drip body that keeps resetting the socket idle timeout still cannot
     // hold the connection past the total time budget. The settle guard makes ok and
     // fail idempotent and clears the deadline once the request is done.
     let settled = false
     let deadline: NodeJS.Timeout | undefined
-    const ok = (v: { redirectTo?: URL; body?: string }) => { if (settled) return; settled = true; clearTimeout(deadline); resolve(v) }
+    const ok = (v: { redirectTo?: URL; body?: string; headers?: Record<string, string | string[] | undefined> }) => { if (settled) return; settled = true; clearTimeout(deadline); resolve(v) }
     const fail = (e: unknown) => { if (settled) return; settled = true; clearTimeout(deadline); reject(e) }
     const req = requestFn(opts, (r) => {
       const status = r.statusCode ?? 0
@@ -216,7 +218,7 @@ async function step(state: FetchState): Promise<string> {
         if (total > MAX_BYTES) { req.destroy(); stream.destroy(); return fail(new UnsafeUrlError('response exceeds size cap')) }
         chunks.push(c)
       })
-      stream.on('end', () => ok({ body: Buffer.concat(chunks).toString('utf8') }))
+      stream.on('end', () => ok({ body: Buffer.concat(chunks).toString('utf8'), headers: r.headers }))
       stream.on('error', (e) => fail(e))
     })
     deadline = setTimeout(() => req.destroy(new UnsafeUrlError('time budget exceeded')), remaining)
@@ -229,11 +231,18 @@ async function step(state: FetchState): Promise<string> {
     if (state.redirects >= MAX_REDIRECTS) throw new UnsafeUrlError('too many redirects')
     return step({ url: result.redirectTo, redirects: state.redirects + 1, started: state.started })
   }
-  return result.body ?? ''
+  return { html: result.body ?? '', headers: result.headers ?? {}, url: url.href }
 }
 
-export async function safeFetchHtml(rawUrl: string): Promise<string> {
+// Fetch the served surface with the same guard, returning the body, the final
+// response headers (after redirects), and the final URL. The headers are what the
+// hardened auditor's header altitude needs; a plain HTML fetch cannot see them.
+export async function safeFetchSurface(rawUrl: string): Promise<Surface> {
   let target: URL
   try { target = new URL(rawUrl) } catch { throw new UnsafeUrlError(`not a URL: ${rawUrl}`) }
   return step({ url: target, redirects: 0, started: Date.now() })
+}
+
+export async function safeFetchHtml(rawUrl: string): Promise<string> {
+  return (await safeFetchSurface(rawUrl)).html
 }

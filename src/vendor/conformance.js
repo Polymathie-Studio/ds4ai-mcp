@@ -113,8 +113,11 @@ function offHappyPath() {
   return { checked: false, notChecked: 'The loading, empty, error, and 404 states are not visible in a single happy-path render, so a static snapshot cannot verify them. Check them by driving the surface into each state.', findings: [] };
 }
 
-// --- Key privacy (HASP): scan for exposed secrets in the served markup. ---
-function keyPrivacy(html) {
+// --- Hardened (HASP): headline client-surface hardening; run the hardened auditor
+// (hardened.js) for the full header effectiveness and markup-integrity checks. The
+// secrets altitude always runs on the HTML; the header altitude runs only when the
+// response headers are given, and is declared not-checked otherwise. ---
+function hardened(html, opts = {}) {
   const findings = [];
   const patterns = [
     ['openai-anthropic', /\bsk-[A-Za-z0-9_-]{20,}\b/],
@@ -124,10 +127,29 @@ function keyPrivacy(html) {
     ['slack-token', /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/],
   ];
   for (const [code, re] of patterns) {
-    if (re.test(html)) findings.push(finding('error', 'exposed-key', `A string matching a ${code} was found in the served markup; a key must never reach the client bundle. Hold it with HASP or keep it server-side.`));
+    if (re.test(html)) findings.push(finding('error', 'exposed-key', `A string matching a ${code} was found in the served markup; a key must never reach the client bundle. Hold it with HASP (hasp-key) or keep it server-side.`));
   }
-  if (findings.length === 0) findings.push(finding('pass', 'key-privacy', 'No exposed API-key-shaped strings found in the served markup.'));
-  return { checked: true, findings };
+
+  // The header altitude, headline only (presence, not effectiveness). Effectiveness is
+  // the depth auditor's job. Without response headers this cannot be seen, so it is
+  // declared rather than reported clean.
+  let notChecked;
+  const H = {};
+  if (opts.headers && typeof opts.headers === 'object') for (const k of Object.keys(opts.headers)) H[k.toLowerCase()] = String(opts.headers[k]);
+  if (Object.keys(H).length > 0) {
+    const csp = H['content-security-policy'];
+    if (!csp) findings.push(finding('warning', 'csp-missing', 'No Content-Security-Policy response header; the page has no declared defense against injected content.'));
+    if (!(csp && /frame-ancestors\s+/i.test(csp)) && !/^(deny|sameorigin)$/i.test((H['x-frame-options'] || '').trim())) findings.push(finding('warning', 'clickjacking', 'No clickjacking protection (frame-ancestors or X-Frame-Options).'));
+    if (!H['strict-transport-security']) findings.push(finding('warning', 'hsts-missing', 'No Strict-Transport-Security header.'));
+    if ((H['x-content-type-options'] || '').toLowerCase().trim() !== 'nosniff') findings.push(finding('warning', 'nosniff-missing', 'No X-Content-Type-Options: nosniff.'));
+  } else {
+    notChecked = 'The header altitude (Content-Security-Policy, clickjacking protection, HSTS, nosniff, and the rest) needs the response headers, which were not provided. Pass opts.headers, and run the hardened auditor for header effectiveness and markup integrity.';
+  }
+
+  if (findings.length === 0 && !notChecked) findings.push(finding('pass', 'hardened', 'No exposed keys, and the headline hardening headers are present.'));
+  const axis = { checked: Object.keys(H).length > 0 ? true : 'partial', deeper: 'the hardened auditor (hardened.js) for header effectiveness and markup integrity', findings };
+  if (notChecked) axis.notChecked = notChecked;
+  return axis;
 }
 
 // --- Findability (BEACON): headline checks; run beacon-ui audit for depth. ---
@@ -181,8 +203,10 @@ function delivery(html) {
 // { ok, axes: { <axis>: { checked, notChecked?, deeper?, findings } } }.
 // ok is true when no finding is an error; axes marked checked:false or 'partial'
 // are declared, not counted as clean. opts.url, the URL the HTML was served from,
-// enables the identity round-trip (canonical versus the served URL). A `truncated`
-// note is added when the input exceeded the audit bound and the report is partial.
+// enables the identity round-trip (canonical versus the served URL). opts.headers, the
+// response headers, enables the header altitude of the hardened axis; without it that
+// altitude is declared not-checked. A `truncated` note is added when the input exceeded
+// the audit bound and the report is partial.
 export function audit(html = '', opts = {}) {
   // Defense in depth against a pathological page: bound the input the regex passes
   // process, so no scan runs unbounded even if a future pattern is not fully linear.
@@ -195,7 +219,7 @@ export function audit(html = '', opts = {}) {
     perceivable: perceivable(html),
     operable: operable(html),
     offHappyPath: offHappyPath(),
-    keyPrivacy: keyPrivacy(html),
+    hardened: hardened(html, opts),
     findability: findability(html, opts),
     delivery: delivery(html),
   };

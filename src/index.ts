@@ -21,10 +21,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { readFileSync } from 'node:fs'
-import { safeFetchHtml, UnsafeUrlError } from './safe-fetch.js'
+import { safeFetchSurface, UnsafeUrlError } from './safe-fetch.js'
 
 // The bundled primitives (vendored zero-dependency ES modules).
-import { audit as auditSurface } from './vendor/conformance.js'
+import { composedAudit } from './composed-audit.js'
 import { head, htmlAttrs, jsonLd, sitemap as beaconSitemap, robots as beaconRobots, audit as auditFindability } from './vendor/beacon.js'
 import { img, picture, cacheHeaders, audit as auditDelivery } from './vendor/fleet.js'
 import { deriveByKey, contrast } from './vendor/derive.js'
@@ -67,25 +67,29 @@ const server = new McpServer({ name: 'ds4ai-mcp', version: SERVER_VERSION })
 // --- The headline tool: audit a shipped surface across all six axes. ---
 server.tool(
   'audit_surface',
-  'Audit a shipped web surface across all six invisible-correctness axes (perceivable, operable, off-happy-path, key-private, findable, fast-and-stable) with the MISSING conformance auditor. Pass a url to fetch and audit the served HTML, or pass html directly. Returns a per-axis report that declares the axes a static check cannot judge rather than reporting them clean.',
+  'Audit a shipped web surface across all six invisible-correctness axes (perceivable, operable, off-happy-path, hardened, findable, fast-and-stable) with the MISSING conformance auditor. Pass a url to fetch and audit the served response, or pass html directly. Runs the breadth pass plus the depth auditors (BEACON, FLEET, and the client-surface hardening auditor) and merges them into one report at evidence level "audited". A fetched url also supplies the response headers the hardened header altitude needs; passing html alone leaves that altitude declared not-checked. The report declares the axes a static check cannot judge rather than reporting them clean.',
   { url: z.string().url().optional(), html: z.string().optional() },
   async ({ url, html }) => {
-    let markup = html
-    if (!markup && url) {
+    let surface: { html: string; headers?: Record<string, string | string[] | undefined>; url?: string }
+    if (html) {
+      surface = { html }
+    } else if (url) {
       // Fetch through the guarded Stage 1 fetcher: scheme allowlist, resolve-then-pin
-      // SSRF guard, redirect re-validation, and size, time, and decompression caps.
-      // The fetched body is inert data for the pure static auditor, never executed.
+      // SSRF guard, redirect re-validation, and size, time, and decompression caps. It
+      // returns the body and the final response headers (the hardened header altitude
+      // needs them); the body is inert data for the pure static auditors, never run.
       try {
-        markup = await safeFetchHtml(url)
+        surface = await safeFetchSurface(url)
       } catch (e) {
         const why = e instanceof UnsafeUrlError ? e.message : (e as Error).message
         return textOut(`Could not fetch ${url}: ${why}`)
       }
+    } else {
+      return textOut('Provide either a url to fetch or an html string to audit.')
     }
-    if (!markup) return textOut('Provide either a url to fetch or an html string to audit.')
-    // Pass the fetched URL through so the auditor can run the identity round-trip
-    // (canonical versus the served URL).
-    return out(auditSurface(markup, url ? { url } : undefined))
+    // The combined runner: conformance breadth over all six axes plus the depth
+    // auditors, merged into one report. Zero-dependency auditors, composition here.
+    return out(composedAudit(surface))
   },
 )
 
