@@ -1,0 +1,13 @@
+{
+  "name": "@polymathie/ds4ai",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts" },
+  "imports": {
+    "@modelcontextprotocol/sdk/": "npm:@modelcontextprotocol/sdk@^1.29.0/",
+    "zod": "npm:zod@^3.25.76"
+  },
+  "publish": {
+    "include": ["src/**/*", "resources/**/*", "README.md", "NOTICE", "LICENSE", "deno.json"]
+  }
+}
