@@ -27,6 +27,8 @@ import { safeFetchSurface, UnsafeUrlError } from './safe-fetch.js'
 import { composedAudit } from './composed-audit.js'
 import { head, htmlAttrs, jsonLd, sitemap as beaconSitemap, robots as beaconRobots, audit as auditFindability } from './vendor/beacon.js'
 import { img, picture, cacheHeaders, audit as auditDelivery } from './vendor/fleet.js'
+import { headerConfig } from './vendor/hasp-guard.js'
+import { audit as auditHardened } from './vendor/hardened.js'
 import { deriveByKey, contrast } from './vendor/derive.js'
 
 const res = (name: string) => readFileSync(new URL('../resources/' + name, import.meta.url), 'utf8')
@@ -146,6 +148,20 @@ server.tool(
   'Audit a page HTML string for delivery in depth (FLEET): unsized images, a lazy-loaded first image, render-blocking head scripts, and inline @font-face without font-display.',
   { html: z.string() },
   async ({ html }) => out(auditDelivery(html)),
+)
+
+// --- Hardened (HASP: hasp-guard generator, hardened.js auditor). ---
+server.tool(
+  'generate_security_headers',
+  'Generate the recommended client-surface security headers (hasp-guard) as config for a named host (netlify, vercel, nginx): an effective Content-Security-Policy with no unsafe-inline or unsafe-eval, frame-ancestors and X-Frame-Options for clickjacking, a two-year HSTS, nosniff, a strict Referrer-Policy, and a closed Permissions-Policy. Inline scripts are served by nonce or hash, not by opening the policy. options passes to the builder: nonce, scriptHashes, and per-directive source arrays (scriptSrc, connectSrc, styleSrc, and so on) widen a directive without reopening the rest; crossOriginIsolation adds the COOP/COEP/CORP trio; allowInlineStyle is available but is flagged by the auditor unless paired with a nonce. This writes declared hardening; it never makes a site secure.',
+  { target: z.enum(['netlify', 'vercel', 'nginx']), options: z.record(z.any()).optional() },
+  async ({ target, options }) => textOut(headerConfig(target, options || {})),
+)
+server.tool(
+  'audit_hardening',
+  'Audit a served response for client-surface hardening in depth (hardened.js, the HASP auditor) across three altitudes: response headers, markup integrity, and secrets. Pass the response headers (needed for the header altitude of Tiers 1 and 2; without them that altitude is declared not-checked rather than reported clean), the html, and the url. It judges effectiveness, not mere presence (a wildcard or unsafe-inline CSP, a short HSTS, a frame-ancestors that allows any origin are flagged), and never calls a site secure.',
+  { html: z.string(), headers: z.record(z.any()).optional(), url: z.string().url().optional() },
+  async ({ html, headers, url }) => out(auditHardened({ html, headers, url })),
 )
 
 // --- Perceivable (TEMPER). ---
