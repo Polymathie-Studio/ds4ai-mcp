@@ -228,3 +228,120 @@ export function audit(html = '', opts = {}) {
   if (truncated) result.truncated = `The input exceeded ${MAX_AUDIT_LENGTH} bytes and was truncated for the audit; anything past that point was not seen, so this report is partial. Audit a smaller surface or split the page.`;
   return result;
 }
+
+// --- The conformance report: placing a surface on the internal evidence ladder. ---
+//
+// audit() answers "what did a static pass find". report() answers the standard's two
+// questions: breadth (does the surface reach MISSING Conformant across all six axes)
+// and evidence (what rung, self-reported / re-provable / audited, each axis stands on).
+// Every axis a report names carries a defined, re-runnable check, so a report is itself
+// the re-provable artifact, the rung that faces outward: publish it and an outsider can
+// re-run report() against the surface and reconcile() it against the claim.
+//
+// An axis reaches AUDITED when its defined check was applied and a result recorded: the
+// auditor applied it in full (checked === true), or a proven error settled it as a fail,
+// or a human applied the axis's stated procedure and passed the result in via opts.results
+// (e.g. { perceivable: 'pass', offHappyPath: 'pass' }). Otherwise the check is named but
+// not yet applied for this surface, and the axis stands at RE-PROVABLE. It never claims
+// a rung the tool did not derive; describe, do not rank.
+
+const RUNG_ORDER = { 'self-reported': 0, 're-provable': 1, audited: 2 };
+
+const CHECKS = {
+  perceivable: 'conformance.js perceivable() plus TEMPER contrast() against the palette',
+  operable: 'conformance.js operable()',
+  offHappyPath: 'the stated procedure: drive the surface into the loading, empty, error, and not-found states',
+  hardened: 'conformance.js hardened() plus hardened.js (header effectiveness and markup integrity)',
+  findability: 'conformance.js findability() plus beacon-ui audit()',
+  delivery: 'conformance.js delivery() plus fleet-ui audit()',
+};
+
+function overallLine({ of, passed, failed, reProvable, earned }) {
+  if (earned) return `MISSING Conformant, audited: all ${of} axes carry a passing audited result.`;
+  const parts = [`audited and passing on ${passed} of ${of} axes`];
+  if (failed) parts.push(`${failed} audited and failing`);
+  if (reProvable) parts.push(`${reProvable} re-provable, awaiting a recorded result`);
+  return `Not yet MISSING Conformant at the audited level: ${parts.join(', ')}.`;
+}
+
+// Build a conformance report from a surface's HTML. Returns
+// { designation, earned, level, breadth, axes: { <axis>: { rung, result, check, needs, findings } }, overall, truncated? }.
+// opts is audit()'s opts (url, headers) plus opts.results, a map of axis -> 'pass' | 'fail'
+// recording a human-applied procedure for the axes a static pass cannot reach.
+export function report(html = '', opts = {}) {
+  const base = audit(html, opts);
+  const results = opts.results && typeof opts.results === 'object' ? opts.results : {};
+  const axes = {};
+  for (const [key, axis] of Object.entries(base.axes)) {
+    const machineError = axis.findings.some((f) => f.level === 'error');
+    const fullyApplied = axis.checked === true;
+    const supplied = results[key];
+    let rung, result;
+    if (machineError) {
+      rung = 'audited';
+      result = 'fail';
+    } else if (fullyApplied) {
+      rung = 'audited';
+      result = 'pass';
+    } else if (supplied === 'pass' || supplied === 'fail') {
+      rung = 'audited';
+      result = supplied;
+    } else {
+      rung = 're-provable';
+      result = null;
+    }
+    axes[key] = {
+      rung,
+      result,
+      check: CHECKS[key] || `conformance.js ${key}()`,
+      needs: rung === 're-provable' ? axis.notChecked || 'a recorded result for this axis' : null,
+      findings: axis.findings,
+    };
+  }
+  const list = Object.values(axes);
+  const of = list.length;
+  const passed = list.filter((a) => a.rung === 'audited' && a.result === 'pass').length;
+  const failed = list.filter((a) => a.rung === 'audited' && a.result === 'fail').length;
+  const reProvable = list.filter((a) => a.rung === 're-provable').length;
+  const complete = passed === of;
+  const earned = complete && failed === 0;
+  const level = list.reduce((lo, a) => (RUNG_ORDER[a.rung] < RUNG_ORDER[lo] ? a.rung : lo), 'audited');
+  const out = {
+    designation: 'MISSING Conformant',
+    earned,
+    level,
+    breadth: { of, auditedPass: passed, auditedFail: failed, reProvable, complete },
+    axes,
+    overall: overallLine({ of, passed, failed, reProvable, earned }),
+  };
+  if (base.truncated) out.truncated = base.truncated;
+  return out;
+}
+
+// Reconcile a published report against a fresh run of the surface, so a claim carried
+// forward cannot outrun what the tool can verify now. It re-runs report() and, per axis,
+// refutes only what the tool can decide: a claimed passing result the fresh audit proves
+// failing is an error. An axis the tool cannot reach on its own (a procedure axis still
+// re-provable on the fresh run) is author-attested, not machine-reconcilable, and is noted
+// rather than refuted. Returns { ok, fresh, findings }. This is the verb a B-style carried
+// manifest would later lean on; for now it reconciles A's own published output.
+export function reconcile(claim = {}, html = '', opts = {}) {
+  const fresh = report(html, opts);
+  const claimAxes = (claim && claim.axes) || {};
+  const findings = [];
+  for (const [key, axis] of Object.entries(fresh.axes)) {
+    const c = claimAxes[key];
+    if (!c) continue;
+    if (axis.result !== null) {
+      // The tool reached a verdict on this axis; hold the claim to it.
+      if (c.result === 'pass' && axis.result === 'fail') {
+        findings.push(finding('error', 'result-overclaim', `Axis ${key} claims a passing result, but a fresh audit finds a failure.`));
+      }
+    } else if (c.rung === 'audited') {
+      // A procedure axis the tool cannot re-run; the claim rests on a human record.
+      findings.push(finding('info', 'author-attested', `Axis ${key} is claimed audited on a human procedure the tool cannot re-run; it is author-attested, not machine-reconciled.`));
+    }
+  }
+  const ok = !findings.some((f) => f.level === 'error');
+  return { ok, fresh, findings };
+}

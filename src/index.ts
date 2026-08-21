@@ -67,10 +67,10 @@ const server = new McpServer({ name: 'ds4ai-mcp', version: SERVER_VERSION })
 // --- The headline tool: audit a shipped surface across all six axes. ---
 server.tool(
   'audit_surface',
-  'Audit a shipped web surface across all six invisible-correctness axes (perceivable, operable, off-happy-path, hardened, findable, fast-and-stable) with the MISSING conformance auditor. Pass a url to fetch and audit the served response, or pass html directly. Runs the breadth pass plus the depth auditors (BEACON, FLEET, and the client-surface hardening auditor) and merges them into one report at evidence level "audited". A fetched url also supplies the response headers the hardened header altitude needs; passing html alone leaves that altitude declared not-checked. The report declares the axes a static check cannot judge rather than reporting them clean.',
-  { url: z.string().url().optional(), html: z.string().optional() },
-  async ({ url, html }) => {
-    let surface: { html: string; headers?: Record<string, string | string[] | undefined>; url?: string }
+  'Audit a shipped web surface across all six invisible-correctness axes (perceivable, operable, off-happy-path, hardened, findable, fast-and-stable) with the MISSING conformance auditor. Pass a url to fetch and audit the served response, or pass html directly. Runs the breadth pass plus the depth auditors (BEACON, FLEET, and the client-surface hardening auditor) and places each axis on the internal evidence ladder (self-reported, re-provable, audited): the four machine-reachable axes reach audited on a run, while the perceivable and off-happy-path axes stay re-provable until their stated procedures are applied and passed in via `results`. The report states the breadth designation, MISSING Conformant, and whether it is earned. A fetched url also supplies the response headers the hardened header altitude needs; passing html alone leaves that altitude re-provable. It declares the axes a static check cannot judge rather than reporting them clean.',
+  { url: z.string().url().optional(), html: z.string().optional(), results: z.record(z.enum(['pass', 'fail'])).optional() },
+  async ({ url, html, results }) => {
+    let surface: { html: string; headers?: Record<string, string | string[] | undefined>; url?: string; results?: Record<string, 'pass' | 'fail'> }
     if (html) {
       surface = { html }
     } else if (url) {
@@ -88,7 +88,10 @@ server.tool(
       return textOut('Provide either a url to fetch or an html string to audit.')
     }
     // The combined runner: conformance breadth over all six axes plus the depth
-    // auditors, merged into one report. Zero-dependency auditors, composition here.
+    // auditors, merged into one report placed on the evidence ladder. Zero-dependency
+    // auditors, composition here. A caller's procedure results lift the two axes a
+    // static pass cannot reach from re-provable to audited.
+    if (results) surface.results = results
     return out(composedAudit(surface))
   },
 )
