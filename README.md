@@ -2,17 +2,26 @@
 
 The aggregate endpoint of **DS4AI, the Design Suite for AI, from [Polymathie-Studio](https://github.com/Polymathie-Studio)**. It serves the suite as callable MCP tools, so a person working with an AI reaches the conformance auditor and the generators through their agent, without calling a function. Unlike the `@proof-of-coord` standards servers, which point at canonical source, this server *runs* the primitives, and because it is a process rather than a browser it can fetch a URL and audit the served HTML.
 
-## Run it
+## Use it
 
-No build step, no global install, the way the other servers run:
+This server is hosted as a public HTTP endpoint, and is published to npm and JSR as `@polymathie/ds4ai`. Connect the hosted server with nothing to install:
+
+```json
+{
+  "mcpServers": {
+    "ds4ai": { "type": "http", "url": "https://ds4ai-production.up.railway.app/mcp" }
+  }
+}
+```
+
+Or run it locally, no clone:
 
 ```
-deno run -A jsr:@polymathie/ds4ai
+npx @polymathie/ds4ai                 # from npm
+deno run -A jsr:@polymathie/ds4ai     # from JSR (Deno)
 ```
 
-Or from npm: `npx @polymathie/ds4ai`. It speaks MCP over stdio.
-
-Add it to an MCP client (Claude Code, Cursor, and the rest) as a stdio server whose command is `deno` with arguments `run -A jsr:@polymathie/ds4ai`.
+Add it to an MCP client (Claude Code, Cursor, and the rest) either as the hosted HTTP server above, or as a stdio server whose command is `npx @polymathie/ds4ai`. The full reference for every connection method is [Using the MCP servers](https://github.com/durgadasji/standards-index/blob/main/using-the-mcp-servers.md).
 
 ## Tools
 
@@ -31,7 +40,7 @@ Every result carries a provenance stamp declaring the server and bundled primiti
 
 ## How it is built
 
-TypeScript on the MCP SDK with zod schemas, provenance-stamped, following the `@proof-of-coord` pattern. The zero-dependency primitives (TEMPER, BEACON, FLEET, and the MISSING conformance auditor) are bundled in, so the server is self-contained, and each tool stamps the primitive version it bundled. Published to JSR under `@polymathie`, with an npm `bin` alongside.
+TypeScript on the MCP SDK with zod schemas, provenance-stamped, following the `@proof-of-coord` pattern. The zero-dependency primitives (TEMPER, BEACON, FLEET, and the MISSING conformance auditor) are bundled in, so the server is self-contained, and each tool stamps the primitive version it bundled. Published to npm and JSR under `@polymathie`.
 
 ## Security
 
