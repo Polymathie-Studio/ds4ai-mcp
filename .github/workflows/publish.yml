@@ -4,6 +4,9 @@ name: Publish
 # authorizes this via the GitHub repository linked in the package's JSR
 # settings. Runs on every push to main; jsr publish is a no-op when the
 # version in deno.json is already published, so it only publishes on a bump.
+#
+# npm ci runs first because jsr publish resolves the package's npm imports
+# (@modelcontextprotocol/sdk, zod) from node_modules; a fresh checkout has none.
 on:
   push:
     branches:
@@ -17,5 +20,9 @@ jobs:
       id-token: write # required for JSR OIDC authentication
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
       - name: Publish package
         run: npx --yes jsr publish
