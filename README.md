@@ -21,7 +21,7 @@ npx @polymathie/ds4ai                 # from npm
 deno run -A jsr:@polymathie/ds4ai     # from JSR (Deno)
 ```
 
-Add it to an MCP client (Claude Code, Cursor, and the rest) either as the hosted HTTP server above, or as a stdio server whose command is `npx @polymathie/ds4ai`. The full reference for every connection method is [Using the MCP servers](https://github.com/durgadasji/standards-index/blob/main/using-the-mcp-servers.md).
+Add it to an MCP client (Claude Code, Cursor, and the rest) either as the hosted HTTP server above, or as a stdio server whose command is `npx @polymathie/ds4ai`. The four MCP servers are listed at [integritysuite.org/built](https://integritysuite.org/built), and the full reference for every connection method is [Using the MCP servers](https://github.com/durgadasji/standards-index/blob/main/using-the-mcp-servers.md).
 
 ## Tools
 
