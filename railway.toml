@@ -1,0 +1,8 @@
+[deploy]
+startCommand = "node dist/http.js"
+# Deep health check: /health runs a real MCP handshake against /mcp, so a build
+# that cannot answer the MCP contract fails its healthcheck and is not promoted
+# over the working deploy. See src/http.ts.
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
